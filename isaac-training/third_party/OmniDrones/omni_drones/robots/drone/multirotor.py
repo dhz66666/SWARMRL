@@ -120,6 +120,11 @@ class MultirotorBase(RobotBase):
                 self.rotor_joint_indices = None
         else:
             super().initialize(prim_paths_expr=f"{prim_paths_expr}/base_link")
+    # 当你调用这一行时，父类（RobotBase）会拿着路径表达式（类似 .../env_*/Hummingbird_*）去扫描整个 USD 场景。
+
+    # 如果你之前在 spawn 里每个环境放了 2 架飞机。
+
+    # 那么 super().initialize() 扫描完后，会把 self.shape 这个变量设置为 (4096, 2)
             self.base_link = self._view
             self.prim_paths_expr = prim_paths_expr
 
@@ -253,7 +258,7 @@ class MultirotorBase(RobotBase):
         thrusts, moments = vmap(vmap(self.rotors, randomness="different"), randomness="same")(
             rotor_cmds, self.rotor_params
         )
-
+        # print("thrusts前action:", actions)
         rotor_pos, rotor_rot = self.rotors_view.get_world_poses()
         torque_axis = quat_axis(rotor_rot.flatten(end_dim=-2), axis=2).unflatten(0, (*self.shape, self.num_rotors))
 
@@ -276,7 +281,7 @@ class MultirotorBase(RobotBase):
                 kz=0.3
             ).sum(-2)
         self.forces[:] += (self.drag_coef * self.masses) * self.vel[..., :3]
-
+        # self.forces[..., 2] -= self.gravity.reshape(self.forces[..., 2].shape)
         self.rotors_view.apply_forces_and_torques_at_pos(
             self.thrusts.reshape(-1, 3), 
             is_global=False
@@ -287,6 +292,7 @@ class MultirotorBase(RobotBase):
             is_global=True
         )
         self.throttle_difference[:] = torch.norm(self.throttle - last_throttle, dim=-1)
+        # print("thrusts后action:",self.throttle.sum(-1))
         return self.throttle.sum(-1)
 
     def get_state(self, check_nan: bool=False, env_frame: bool=True):

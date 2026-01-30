@@ -22,7 +22,7 @@
 
 
 from typing import Any, Dict, Optional, Sequence, Union, Tuple
-
+import numpy as np
 import torch
 from tensordict.tensordict import TensorDictBase, TensorDict
 from torchrl.data.tensor_specs import TensorSpec
@@ -218,7 +218,7 @@ class VelController(Transform):
         yaw_control: bool = True,
         action_key: str = ("agents", "action"),
     ):
-        super().__init__([], in_keys_inv=[("info", "drone_state")])
+        super().__init__([], in_keys_inv=[("info", "drone_state"), action_key])
         self.controller = controller
         self.yaw_control = yaw_control
         self.action_key = action_key
@@ -233,37 +233,207 @@ class VelController(Transform):
         input_spec[("full_action_spec", *self.action_key)] = spec
         return input_spec
     
-    def _inv_call(self, tensordict: TensorDictBase) -> TensorDictBase:
-        # print("tensordict size: ", tensordict.shape)
-        # print("tensor dict: ", tensordict)
-        drone_state = tensordict[("info", "drone_state")][..., :13]
-        # print("drone state shape: ", drone_state.shape)
+    # def _inv_call(self, tensordict: TensorDictBase) -> TensorDictBase:
+    #     # print("tensordict size: ", tensordict.shape)
+    #     # print("tensor dict: ", tensordict)
+    #     drone_state = tensordict[("info", "drone_state")][..., :13]
+    #     # print("drone state shape: ", drone_state.shape)
 
+    #     action = tensordict[self.action_key]
+    #     print('转换推力的action:', action)
+    #     if (self.yaw_control):
+    #         target_vel, target_yaw = action.split([3, 1], -1)
+    #         target_vel = target_vel.unsqueeze(1)
+    #         target_yaw = target_yaw.unsqueeze(1)
+    #         target_yaw = target_yaw * torch.pi
+    #     else:
+    #         target_vel = action.unsqueeze(1)
+    #         # print("target vel: ", target_vel)
+    #         # target_yaw = torch.zeros(action.shape[:-1] + (1,), device=action.device)
+    #         target_yaw = None
+
+    #     # print("drone vel shape: ", target_vel.shape)
+    #     # print("target vel: ", target_vel)
+    #     cmds = self.controller(
+    #         drone_state, 
+    #         target_vel=target_vel, 
+    #         target_yaw=target_yaw
+    #     )
+    #     if torch.rand(1) < 0.05: # 降低打印频率
+    #                 print(f"[3️⃣ Controller Output] Motor Cmds: {cmds[0,0].detach().cpu().numpy()}")
+    #                 print("=====================================================")
+    #     torch.nan_to_num_(cmds, 0.)
+    #     tensordict.set(self.action_key, cmds)
+    #     print('转换后的电机指令:', cmds)
+    #     # if int(self.progress_buf[0].item()) % 200 == 0:
+    #         # print(f"DEBUG: 转换后的 Action 维度 (应为4): {cmds.shape}")
+    #     return tensordict
+#     def _inv_call(self, tensordict: TensorDictBase) -> TensorDictBase:
+#         # 1. 获取无人机真实状态
+#         # state 结构通常是: [Pos(3), Quat(4), LinVel(3), AngVel(3)]
+#         drone_state = tensordict[("info", "drone_state")][..., :13]
+        
+#         # 提取真实的世界系位置和速度，用于对比
+#         current_pos = drone_state[..., :3]
+#         current_vel = drone_state[..., 7:10]
+
+#         # 2. 获取 Action (这里应该是 PPO 转好的世界系速度)
+#         action = tensordict[self.action_key]
+        
+#         # 3. 解析结构
+#         if (self.yaw_control):
+#             target_vel, target_yaw = action.split([3, 1], -1)
+#             target_vel = target_vel.unsqueeze(1)
+#             target_yaw = target_yaw.unsqueeze(1) * torch.pi
+#         else:
+#             target_vel = action.unsqueeze(1)
+#             target_yaw = None
+
+#         # ==================== 🧪 强制测试区 (Debug Zone) ====================
+#         # 【说明】在这里强制修改 target_vel，验证物理反应。
+#         # 请每次只【取消注释】其中一个测试！
+        
+#         # --- 🟢 测试 1: Z轴 (推力测试) ---
+#         target_vel.zero_()
+#         target_vel[..., 0] = 0.0
+#         target_vel[..., 1] = 0.0
+#         target_vel[..., 2] = 1.0  # 向上飞 1m/s
+#         print(f"target_vel: {target_vel}")
+#         # --- 🔵 测试 2: X轴 (俯仰测试) ---
+#         # target_vel.zero_()
+#         # target_vel[..., 0] = 1.0  # 向北(前)飞 1m/s
+#         # target_vel[..., 1] = 0.0
+#         # target_vel[..., 2] = 0.0  # 保持高度0 (甚至可能掉下来，因为没给推力维持)
+        
+#         # --- 🟣 测试 3: Y轴 (滚转测试) ---
+#         # target_vel.zero_()
+#         # target_vel[..., 0] = 0.0
+#         # target_vel[..., 1] = 1.0  # 向西(左)飞 1m/s
+#         #  0.0
+        
+#         # ====================================================================
+
+#         # 4. 核心解算
+#         cmds = self.controller(
+#             drone_state, 
+#             target_vel=target_vel, 
+#             target_yaw=target_yaw
+#         )
+        
+#         # 5. 🔍 闭环监控打印
+#         # 为了不刷屏，我们只在每 50 步打印一次，且只看第 0 个环境
+# # 5. 🔍 闭环监控打印
+#         if torch.rand(1) < 0.5:
+#             # 【关键修改】多加一个 [0]，锁定到第 0 号 Agent
+#             # 假设 target_vel 形状是 [Batch, 1, Agent, 3]
+#             # [0] -> Batch 0
+#             # [0] -> TimeStep 0 (unsqueeze的那一维)
+#             # [0] -> Agent 0  <--- 之前少了这个
+            
+#             # 使用 try-except 保护，防止维度变化再次报错
+#             try:
+#                 # 这种写法兼容性最强：先转 numpy，再 flatten 展平，取前3个
+#                 t_v = target_vel[0,0,0].detach().cpu().numpy().flatten()
+#                 c_v = current_vel[0,0].detach().cpu().numpy().flatten() 
+#                 c_p = current_pos[0,0].detach().cpu().numpy().flatten()
+#                 mot = cmds[0,0].detach().cpu().numpy().flatten()
+                
+#                 print(f"\n======== 📡 物理链路 Debug ========")
+#                 # 现在的 t_v[0] 绝对是标量了
+#                 print(f"🎯 [期望] Target Vel (World): [{t_v[0]:.2f}, {t_v[1]:.2f}, {t_v[2]:.2f}]")
+#                 print(f"🚙 [现状] Actual Vel (World): [{c_v[0]:.2f}, {c_v[1]:.2f}, {c_v[2]:.2f}]")
+#                 print(f"📍 [位置] Actual Pos (World): [{c_p[0]:.2f}, {c_p[1]:.2f}, {c_p[2]:.2f}]")
+#                 print(f"⚡ [执行] Motor Cmds        : {mot}")
+                
+#                 if abs(t_v[2]) > 0.1:
+#                     diff = c_v[2] - t_v[2]
+#                     status = "✅ 正在接近" if abs(diff) < 0.5 else "⚠️ 差距过大"
+#                     print(f"   >>> Z轴响应检查: {status} (Err={diff:.2f})")
+                
+#                 if abs(t_v[0]) > 0.1:
+#                     # 简单的逻辑检查：如果向前飞，后电机(通常index较大)应该大
+#                     # 注意：这取决于你的电机排序，假设 2,3 是后电机
+#                     is_pitch_down = mot[2] > mot[0] 
+#                     print(f"   >>> X轴逻辑检查: {'✅ 后推力大(低头)' if is_pitch_down else '❌ 前推力大?'}")
+                
+#                 print("====================================")
+#             except Exception as e:
+#                 print(f"⚠️ Debug打印出错 (不影响训练): {e}")
+#                 print(f"Shape Debug: TV={target_vel.shape}, CV={current_vel.shape}")
+#         torch.nan_to_num_(cmds, 0.)
+#         tensordict.set(self.action_key, cmds)
+#         return tensordict
+    def _inv_call(self, tensordict: TensorDictBase) -> TensorDictBase:
+        # 1. 获取状态
+        drone_state = tensordict[("info", "drone_state")][..., :13]
+        current_vel = drone_state[..., 7:10] # [Batch, Agent, 3]
+
+        # 2. 获取与处理动作
         action = tensordict[self.action_key]
-        if (self.yaw_control):
+        
+        if self.yaw_control:
             target_vel, target_yaw = action.split([3, 1], -1)
-            target_vel = target_vel.unsqueeze(1)
-            target_yaw = target_yaw.unsqueeze(1)
-            target_yaw = target_yaw * torch.pi
+            target_yaw = target_yaw * torch.pi 
         else:
-            target_vel = action.unsqueeze(1)
-            # print("target vel: ", target_vel)
-            # target_yaw = torch.zeros(action.shape[:-1] + (1,), device=action.device)
+            target_vel = action # [Batch, Agent, 3]
             target_yaw = None
 
-        # print("drone vel shape: ", target_vel.shape)
-        # print("target vel: ", target_vel)
+        # 3. 控制器解算
         cmds = self.controller(
             drone_state, 
             target_vel=target_vel, 
             target_yaw=target_yaw
         )
 
+        # # ==================== 📋 全量数据监控 (Full Monitor) ====================
+        # # 只有 5% 的概率触发，但一旦触发，打印所有 Agent 的详情
+        # if torch.rand(1) < 0.5: 
+        #     try:
+        #         # 转 Numpy 以便格式化，且不影响计算图
+        #         tv_np = target_vel.detach().cpu().numpy()
+        #         cv_np = current_vel.detach().cpu().numpy()
+                
+        #         # 获取维度: Batch数, Agent数
+        #         B, A, _ = tv_np.shape
+                
+        #         # print(f"\n======== 📊 全局速度跟踪表 (Envs: {B}, Agents: {A}) ========")
+        #         # # 打印表头
+        #         # print(f"{'Env':<4} | {'Ag':<2} | {'Target (Vx, Vy, Vz)':<22} | {'Actual (Vx, Vy, Vz)':<22} | {'Error Diff':<22} | {'Status'}")
+        #         # print("-" * 105)
+
+        #         # 双重循环遍历所有数据
+        #         for b in range(B):
+        #             for a in range(A):
+        #                 t = tv_np[b, a] # 目标
+        #                 c = cv_np[b, a] # 现状
+        #                 err = t - c     # 误差
+                        
+        #                 # 格式化字符串
+        #                 t_str = f"[{t[0]:5.2f}, {t[1]:5.2f}, {t[2]:5.2f}]"
+        #                 c_str = f"[{c[0]:5.2f}, {c[1]:5.2f}, {c[2]:5.2f}]"
+        #                 e_str = f"[{err[0]:5.2f}, {err[1]:5.2f}, {err[2]:5.2f}]"
+                        
+        #                 # 状态诊断
+        #                 status = "✅"
+        #                 # 如果高度误差超过 0.5
+        #                 if abs(err[2]) > 0.5:
+        #                     status = "⚠️ 动力不足" if err[2] > 0 else "📉 掉高/过冲"
+        #                 # 如果水平误差很大
+        #                 elif np.linalg.norm(err[:2]) > 1.0:
+        #                     status = "⚠️ 偏航"
+
+        #         #         print(f"{b:<4} | {a:<2} | {t_str} | {c_str} | {e_str} | {status}")
+                
+        #         # print("=" * 105)
+
+        #     except Exception as e:
+        #         print(f"Debug Error: {e}")
+        # # ======================================================================
+
+        # 4. 写回
         torch.nan_to_num_(cmds, 0.)
         tensordict.set(self.action_key, cmds)
         return tensordict
-
-
 class RateController(Transform):
     def __init__(
         self,

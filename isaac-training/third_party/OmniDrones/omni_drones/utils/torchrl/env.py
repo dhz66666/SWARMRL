@@ -92,9 +92,20 @@ class RenderCallback:
     
     def __call__(self, env, *args):
         if self.i % self.interval == 0:
+            # 获取当前帧
             frame = env.render(mode="rgb_array")
+            
+            # --- 关键修改：处理设备冲突 ---
+            # 如果 frame 是 PyTorch 张量，强制转为 CPU 上的 Numpy 数组
+            if torch.is_tensor(frame):
+                frame = frame.cpu().detach().numpy()
+            # 如果 frame 已经是 Numpy 数组但还在某个缓冲区，确保它是副本
+            elif isinstance(frame, np.ndarray):
+                frame = frame.copy()
+            
             self.frames.append(frame)
             self.t.update(self.interval)
+            
         self.i += 1
         return self.i
     

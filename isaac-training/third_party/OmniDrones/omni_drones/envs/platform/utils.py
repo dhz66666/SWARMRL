@@ -260,6 +260,7 @@ class OveractuatedPlatform(RobotBase):
         self.up[:] = quat_axis(self.rot, axis=2)
         state = [self.pos, self.rot, self.vel, self.heading, self.up]
         state = torch.cat(state, dim=-1)
+        print("pos", self.pos.shape, "rot", self.rot.shape, "vel", vel.shape)
         return state
 
     def get_linear_smoothness(self):
